@@ -1,3 +1,4 @@
+node_modules/
 glb-to-obj
 *.bun-build
 .*.bun-build

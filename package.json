@@ -6,5 +6,8 @@
   "scripts": {
     "convert": "bun run ./glb-to-obj.ts",
     "build": "bun build --compile ./glb-to-obj.ts --outfile glb-to-obj"
+  },
+  "dependencies": {
+    "draco3dgltf": "^1.5.7"
   }
 }

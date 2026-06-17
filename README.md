@@ -1,17 +1,25 @@
 # GLB to OBJ Converter
 
-Simple Bun script for converting binary `.glb` mesh geometry to `.obj`.
+Simple Bun script for converting binary `.glb` files to Wavefront `.obj`.
 
 ```sh
 bun run ./glb-to-obj.ts
 ```
 
-With no arguments, it converts `.glb` files in the current folder and writes each `.obj` next to its source file with the same basename. Existing `.obj` files are skipped.
+With no arguments, it converts `.glb` files in the current folder. Existing `.obj` files are skipped.
 
 ```sh
 bun run ./glb-to-obj.ts model.glb
 bun run ./glb-to-obj.ts ./models
 bun run ./glb-to-obj.ts --force
+```
+
+For `model.glb`, outputs are written beside the source file:
+
+```text
+model.obj
+model.mtl
+model_textures/
 ```
 
 To build a standalone executable:
@@ -20,4 +28,6 @@ To build a standalone executable:
 bun run build
 ```
 
-This first pass exports mesh positions, triangle faces, normals, UVs, and node transforms. It does not export materials, textures, skins, animations, cameras, sparse accessors, Draco-compressed meshes, or non-triangle primitives.
+The converter exports mesh positions, triangle faces, normals, UVs, node transforms, materials, embedded textures, and Draco-compressed glTF meshes.
+
+OBJ/MTL cannot represent every glTF feature, so skins, animations, cameras, sparse accessors, and non-triangle primitives are not exported. glTF PBR materials are mapped to a practical MTL subset with comments for metallic-roughness and occlusion textures.

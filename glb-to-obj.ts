@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, join, resolve } from "node:path";
+import draco3dImport from "draco3dgltf";
 
 type Gltf = {
   scene?: number;
@@ -11,6 +12,9 @@ type Gltf = {
   accessors?: GltfAccessor[];
   bufferViews?: GltfBufferView[];
   buffers?: Array<{ uri?: string; byteLength?: number }>;
+  materials?: GltfMaterial[];
+  textures?: GltfTexture[];
+  images?: GltfImage[];
 };
 
 type GltfNode = {
@@ -32,7 +36,16 @@ type GltfPrimitive = {
   mode?: number;
   attributes?: Record<string, number>;
   indices?: number;
-  extensions?: Record<string, unknown>;
+  material?: number;
+  extensions?: {
+    KHR_draco_mesh_compression?: DracoMeshCompression;
+    [key: string]: unknown;
+  };
+};
+
+type DracoMeshCompression = {
+  bufferView: number;
+  attributes: Record<string, number>;
 };
 
 type GltfAccessor = {
@@ -50,6 +63,42 @@ type GltfBufferView = {
   byteOffset?: number;
   byteLength: number;
   byteStride?: number;
+};
+
+type GltfMaterial = {
+  name?: string;
+  alphaMode?: string;
+  doubleSided?: boolean;
+  emissiveFactor?: number[];
+  pbrMetallicRoughness?: {
+    baseColorFactor?: number[];
+    baseColorTexture?: GltfTextureInfo;
+    metallicFactor?: number;
+    roughnessFactor?: number;
+    metallicRoughnessTexture?: GltfTextureInfo;
+  };
+  normalTexture?: GltfTextureInfo;
+  occlusionTexture?: GltfTextureInfo;
+  emissiveTexture?: GltfTextureInfo;
+};
+
+type GltfTextureInfo = {
+  index: number;
+};
+
+type GltfTexture = {
+  source?: number;
+  extensions?: {
+    EXT_texture_webp?: { source?: number };
+    [key: string]: unknown;
+  };
+};
+
+type GltfImage = {
+  name?: string;
+  uri?: string;
+  mimeType?: string;
+  bufferView?: number;
 };
 
 type Vec2 = [number, number];
@@ -91,6 +140,81 @@ type ObjParts = {
   uvOffset: number;
   normalOffset: number;
 };
+
+type PrimitiveGeometry = {
+  positions: Vec3[];
+  normals?: Vec3[];
+  uvs?: Vec2[];
+  indices: number[];
+};
+
+type TextureArtifact = {
+  relativePath: string;
+  bytes: Uint8Array;
+};
+
+type ConvertedArtifacts = {
+  obj: string;
+  mtl?: string;
+  textures: TextureArtifact[];
+};
+
+type MaterialLibrary = {
+  mtl?: string;
+  materialNames: Map<number, string>;
+  textures: TextureArtifact[];
+};
+
+type DracoModule = {
+  Decoder: new () => DracoDecoder;
+  DecoderBuffer: new () => DracoDecoderBuffer;
+  Mesh: new () => DracoMesh;
+  DracoFloat32Array: new () => DracoFloat32Array;
+  TRIANGULAR_MESH: number;
+  HEAPU32: Uint32Array;
+  _malloc(size: number): number;
+  _free(pointer: number): void;
+  destroy(value: object): void;
+};
+
+type DracoDecoder = {
+  GetEncodedGeometryType(buffer: DracoDecoderBuffer): number;
+  GetEncodedGeometryType_Deprecated(buffer: DracoDecoderBuffer): number;
+  DecodeBufferToMesh(buffer: DracoDecoderBuffer, mesh: DracoMesh): DracoStatus;
+  GetAttributeByUniqueId(mesh: DracoMesh, uniqueId: number): DracoAttribute;
+  GetAttributeFloatForAllPoints(mesh: DracoMesh, attribute: DracoAttribute, values: DracoFloat32Array): boolean;
+  GetTrianglesUInt32Array(mesh: DracoMesh, byteLength: number, pointer: number): boolean;
+};
+
+type DracoDecoderBuffer = {
+  Init(data: Uint8Array, byteLength: number): void;
+};
+
+type DracoMesh = {
+  num_faces(): number;
+  num_points(): number;
+};
+
+type DracoStatus = {
+  ok(): boolean;
+  error_msg(): string;
+};
+
+type DracoAttribute = {
+  num_components(): number;
+};
+
+type DracoFloat32Array = {
+  GetValue(index: number): number;
+  size(): number;
+};
+
+type DracoPackage = {
+  createDecoderModule(options: Record<string, never>): Promise<DracoModule>;
+};
+
+const draco3d = draco3dImport as DracoPackage;
+let dracoModulePromise: Promise<DracoModule> | undefined;
 
 function parseGlb(bytes: Uint8Array): { gltf: Gltf; bin: Uint8Array } {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -141,6 +265,29 @@ function parseGlb(bytes: Uint8Array): { gltf: Gltf; bin: Uint8Array } {
   }
 
   return { gltf: json, bin };
+}
+
+function getBufferViewBytes(gltf: Gltf, bin: Uint8Array, bufferViewIndex: number): Uint8Array {
+  const bufferView = gltf.bufferViews?.[bufferViewIndex];
+  if (!bufferView) {
+    throw new Error(`Missing bufferView ${bufferViewIndex}.`);
+  }
+  if (bufferView.buffer !== undefined && bufferView.buffer !== 0) {
+    throw new Error("External or multiple GLB buffers are not supported yet.");
+  }
+
+  const start = bufferView.byteOffset ?? 0;
+  const end = start + bufferView.byteLength;
+  if (end > bin.byteLength) {
+    throw new Error(`BufferView ${bufferViewIndex} extends past the binary chunk.`);
+  }
+
+  return bin.subarray(start, end);
+}
+
+async function getDracoModule(): Promise<DracoModule> {
+  dracoModulePromise ??= draco3d.createDecoderModule({});
+  return dracoModulePromise;
 }
 
 function identity(): Mat4 {
@@ -344,26 +491,305 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : Number(value.toFixed(8)).toString();
 }
 
-function convertPrimitive(
+function imageExtension(mimeType?: string, uri?: string): string {
+  if (mimeType === "image/jpeg") {
+    return ".jpg";
+  }
+  if (mimeType === "image/png") {
+    return ".png";
+  }
+  if (mimeType === "image/webp") {
+    return ".webp";
+  }
+  const uriExt = uri ? extname(uri.split("?")[0]) : "";
+  return uriExt || ".bin";
+}
+
+function decodeDataUri(uri: string): Uint8Array | undefined {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/i.exec(uri);
+  if (!match) {
+    return undefined;
+  }
+
+  const payload = decodeURIComponent(match[3]);
+  if (match[2]) {
+    return new Uint8Array(Buffer.from(payload, "base64"));
+  }
+  return new TextEncoder().encode(payload);
+}
+
+function resolveTextureImageIndex(gltf: Gltf, textureIndex: number): number | undefined {
+  const texture = gltf.textures?.[textureIndex];
+  return texture?.extensions?.EXT_texture_webp?.source ?? texture?.source;
+}
+
+function textureRelativePath(gltf: Gltf, textureDir: string, imageIndex: number): string {
+  const image = gltf.images?.[imageIndex];
+  const extension = imageExtension(image?.mimeType, image?.uri);
+  const name = sanitizeName(image?.name ?? `image_${imageIndex}`);
+  return `${textureDir}/${String(imageIndex).padStart(2, "0")}_${name}${extension}`;
+}
+
+function textureReferencePath(gltf: Gltf, textureDir: string, imageIndex: number): string | undefined {
+  const image = gltf.images?.[imageIndex];
+  if (!image) {
+    return undefined;
+  }
+
+  if (image.bufferView !== undefined || image.uri?.startsWith("data:")) {
+    return textureRelativePath(gltf, textureDir, imageIndex);
+  }
+  return image.uri;
+}
+
+function texturePathForMaterial(
+  gltf: Gltf,
+  material: GltfMaterial,
+  slot: keyof Pick<GltfMaterial, "normalTexture" | "occlusionTexture" | "emissiveTexture">,
+  textureDir: string,
+): string | undefined {
+  const textureInfo = material[slot];
+  if (!textureInfo) {
+    return undefined;
+  }
+
+  const imageIndex = resolveTextureImageIndex(gltf, textureInfo.index);
+  return imageIndex === undefined ? undefined : textureReferencePath(gltf, textureDir, imageIndex);
+}
+
+function pbrTexturePath(
+  gltf: Gltf,
+  textureInfo: GltfTextureInfo | undefined,
+  textureDir: string,
+): string | undefined {
+  if (!textureInfo) {
+    return undefined;
+  }
+
+  const imageIndex = resolveTextureImageIndex(gltf, textureInfo.index);
+  return imageIndex === undefined ? undefined : textureReferencePath(gltf, textureDir, imageIndex);
+}
+
+function extractTextureArtifacts(gltf: Gltf, bin: Uint8Array, textureDir: string): TextureArtifact[] {
+  const referencedImages = new Set<number>();
+
+  for (const material of gltf.materials ?? []) {
+    const pbr = material.pbrMetallicRoughness;
+    for (const textureInfo of [
+      pbr?.baseColorTexture,
+      pbr?.metallicRoughnessTexture,
+      material.normalTexture,
+      material.occlusionTexture,
+      material.emissiveTexture,
+    ]) {
+      if (!textureInfo) {
+        continue;
+      }
+      const imageIndex = resolveTextureImageIndex(gltf, textureInfo.index);
+      if (imageIndex !== undefined) {
+        referencedImages.add(imageIndex);
+      }
+    }
+  }
+
+  const artifacts: TextureArtifact[] = [];
+  for (const imageIndex of referencedImages) {
+    const image = gltf.images?.[imageIndex];
+    if (!image) {
+      continue;
+    }
+
+    let bytes: Uint8Array | undefined;
+    if (image.bufferView !== undefined) {
+      bytes = getBufferViewBytes(gltf, bin, image.bufferView);
+    } else if (image.uri?.startsWith("data:")) {
+      bytes = decodeDataUri(image.uri);
+    }
+
+    if (bytes) {
+      artifacts.push({
+        relativePath: textureRelativePath(gltf, textureDir, imageIndex),
+        bytes,
+      });
+    }
+  }
+
+  return artifacts;
+}
+
+function buildMaterialLibrary(gltf: Gltf, bin: Uint8Array, sourceBase: string): MaterialLibrary {
+  const materials = gltf.materials ?? [];
+  if (materials.length === 0) {
+    return { materialNames: new Map(), textures: [] };
+  }
+
+  const textureDir = `${sanitizeName(sourceBase)}_textures`;
+  const textures = extractTextureArtifacts(gltf, bin, textureDir);
+  const materialNames = new Map<number, string>();
+  const usedNames = new Set<string>();
+  const lines = [
+    `# Converted from ${sourceBase}.glb by glb-to-obj.ts`,
+    "# OBJ/MTL supports only a subset of glTF PBR materials.",
+  ];
+
+  materials.forEach((material, index) => {
+    let materialName = sanitizeName(material.name ?? `material_${index}`);
+    while (usedNames.has(materialName)) {
+      materialName = `${materialName}_${index}`;
+    }
+    usedNames.add(materialName);
+    materialNames.set(index, materialName);
+
+    const pbr = material.pbrMetallicRoughness;
+    const baseColor = pbr?.baseColorFactor ?? [1, 1, 1, 1];
+    const emissive = material.emissiveFactor ?? [0, 0, 0];
+    const baseColorTexture = pbrTexturePath(gltf, pbr?.baseColorTexture, textureDir);
+    const normalTexture = texturePathForMaterial(gltf, material, "normalTexture", textureDir);
+    const metallicRoughnessTexture = pbrTexturePath(gltf, pbr?.metallicRoughnessTexture, textureDir);
+    const occlusionTexture = texturePathForMaterial(gltf, material, "occlusionTexture", textureDir);
+    const emissiveTexture = texturePathForMaterial(gltf, material, "emissiveTexture", textureDir);
+
+    lines.push(
+      "",
+      `newmtl ${materialName}`,
+      `Ka ${formatNumber(emissive[0] ?? 0)} ${formatNumber(emissive[1] ?? 0)} ${formatNumber(emissive[2] ?? 0)}`,
+      `Kd ${formatNumber(baseColor[0] ?? 1)} ${formatNumber(baseColor[1] ?? 1)} ${formatNumber(baseColor[2] ?? 1)}`,
+      `d ${formatNumber(baseColor[3] ?? 1)}`,
+      `illum ${baseColorTexture || normalTexture ? 2 : 1}`,
+    );
+
+    if (baseColorTexture) {
+      lines.push(`map_Kd ${baseColorTexture}`);
+    }
+    if (normalTexture) {
+      lines.push(`norm ${normalTexture}`);
+      lines.push(`bump ${normalTexture}`);
+    }
+    if (emissiveTexture) {
+      lines.push(`map_Ke ${emissiveTexture}`);
+    }
+    if (metallicRoughnessTexture) {
+      lines.push(`# glTF metallic-roughness texture: ${metallicRoughnessTexture}`);
+    }
+    if (occlusionTexture) {
+      lines.push(`# glTF occlusion texture: ${occlusionTexture}`);
+    }
+    if (material.alphaMode && material.alphaMode !== "OPAQUE") {
+      lines.push(`# glTF alpha mode: ${material.alphaMode}`);
+    }
+    if (material.doubleSided) {
+      lines.push("# glTF double-sided material");
+    }
+  });
+
+  return {
+    mtl: `${lines.join("\n")}\n`,
+    materialNames,
+    textures,
+  };
+}
+
+async function decodeDracoPrimitive(
   gltf: Gltf,
   bin: Uint8Array,
   primitive: GltfPrimitive,
-  matrix: Mat4,
   name: string,
-  obj: ObjParts,
-): void {
-  if (primitive.extensions?.KHR_draco_mesh_compression) {
-    throw new Error(`${name} uses Draco compression, which is not supported by this simple converter.`);
+): Promise<PrimitiveGeometry> {
+  const extension = primitive.extensions?.KHR_draco_mesh_compression;
+  if (!extension) {
+    throw new Error(`${name} is missing its Draco extension data.`);
   }
 
-  const mode = primitive.mode ?? MODE_TRIANGLES;
-  if (mode !== MODE_TRIANGLES) {
-    throw new Error(`${name} uses primitive mode ${mode}; only TRIANGLES are supported.`);
+  const draco = await getDracoModule();
+  const data = getBufferViewBytes(gltf, bin, extension.bufferView);
+  const decoder = new draco.Decoder();
+  const buffer = new draco.DecoderBuffer();
+  const mesh = new draco.Mesh();
+
+  try {
+    buffer.Init(data, data.byteLength);
+
+    const geometryType = "GetEncodedGeometryType" in decoder
+      ? decoder.GetEncodedGeometryType(buffer)
+      : decoder.GetEncodedGeometryType_Deprecated(buffer);
+    if (geometryType !== draco.TRIANGULAR_MESH) {
+      throw new Error(`${name} is not a Draco triangular mesh.`);
+    }
+
+    const status = decoder.DecodeBufferToMesh(buffer, mesh);
+    if (!status.ok()) {
+      throw new Error(`${name} failed Draco decode: ${status.error_msg()}`);
+    }
+
+    const decodeFloatAttribute = (semantic: string): number[][] | undefined => {
+      const uniqueId = extension.attributes[semantic];
+      if (uniqueId === undefined) {
+        return undefined;
+      }
+
+      const attribute = decoder.GetAttributeByUniqueId(mesh, uniqueId);
+      const componentCount = attribute.num_components();
+      const values = new draco.DracoFloat32Array();
+      try {
+        const ok = decoder.GetAttributeFloatForAllPoints(mesh, attribute, values);
+        if (!ok) {
+          throw new Error(`${name} failed to decode Draco ${semantic} attribute.`);
+        }
+
+        const rows: number[][] = [];
+        for (let point = 0; point < mesh.num_points(); point++) {
+          const row: number[] = [];
+          for (let component = 0; component < componentCount; component++) {
+            row.push(values.GetValue(point * componentCount + component));
+          }
+          rows.push(row);
+        }
+        return rows;
+      } finally {
+        draco.destroy(values);
+      }
+    };
+
+    const positions = decodeFloatAttribute("POSITION") as Vec3[] | undefined;
+    if (!positions) {
+      throw new Error(`${name} has no Draco POSITION attribute.`);
+    }
+
+    const normals = decodeFloatAttribute("NORMAL") as Vec3[] | undefined;
+    const uvs = decodeFloatAttribute("TEXCOORD_0") as Vec2[] | undefined;
+    const indexCount = mesh.num_faces() * 3;
+    const indexBytes = indexCount * 4;
+    const indexPointer = draco._malloc(indexBytes);
+    try {
+      const ok = decoder.GetTrianglesUInt32Array(mesh, indexBytes, indexPointer);
+      if (!ok) {
+        throw new Error(`${name} failed to decode Draco triangle indices.`);
+      }
+      const indices = Array.from(draco.HEAPU32.subarray(indexPointer / 4, indexPointer / 4 + indexCount));
+      return { positions, normals, uvs, indices };
+    } finally {
+      draco._free(indexPointer);
+    }
+  } finally {
+    draco.destroy(mesh);
+    draco.destroy(buffer);
+    draco.destroy(decoder);
+  }
+}
+
+async function readPrimitiveGeometry(
+  gltf: Gltf,
+  bin: Uint8Array,
+  primitive: GltfPrimitive,
+  name: string,
+): Promise<PrimitiveGeometry> {
+  if (primitive.extensions?.KHR_draco_mesh_compression) {
+    return decodeDracoPrimitive(gltf, bin, primitive, name);
   }
 
   const positionAccessor = primitive.attributes?.POSITION;
   if (positionAccessor === undefined) {
-    return;
+    return { positions: [], indices: [] };
   }
 
   const positions = readAccessor(gltf, bin, positionAccessor) as Vec3[];
@@ -374,15 +800,40 @@ function convertPrimitive(
     ? undefined
     : readAccessor(gltf, bin, primitive.attributes.TEXCOORD_0) as Vec2[];
 
-  const rawIndices = primitive.indices === undefined
+  const indices = primitive.indices === undefined
     ? positions.map((_, index) => index)
     : readAccessor(gltf, bin, primitive.indices).map(([index]) => index);
 
-  if (rawIndices.length % 3 !== 0) {
+  return { positions, normals, uvs, indices };
+}
+
+async function convertPrimitive(
+  gltf: Gltf,
+  bin: Uint8Array,
+  primitive: GltfPrimitive,
+  matrix: Mat4,
+  name: string,
+  obj: ObjParts,
+  materialName?: string,
+): Promise<void> {
+  const mode = primitive.mode ?? MODE_TRIANGLES;
+  if (mode !== MODE_TRIANGLES) {
+    throw new Error(`${name} uses primitive mode ${mode}; only TRIANGLES are supported.`);
+  }
+
+  const { positions, normals, uvs, indices } = await readPrimitiveGeometry(gltf, bin, primitive, name);
+  if (positions.length === 0) {
+    return;
+  }
+
+  if (indices.length % 3 !== 0) {
     throw new Error(`${name} does not contain a whole number of triangles.`);
   }
 
   obj.lines.push(`o ${sanitizeName(name)}`);
+  if (materialName) {
+    obj.lines.push(`usemtl ${materialName}`);
+  }
 
   for (const position of positions) {
     const [x, y, z] = transformPoint(matrix, position);
@@ -419,8 +870,8 @@ function convertPrimitive(
     return String(v);
   };
 
-  for (let i = 0; i < rawIndices.length; i += 3) {
-    obj.lines.push(`f ${vertexRef(rawIndices[i])} ${vertexRef(rawIndices[i + 1])} ${vertexRef(rawIndices[i + 2])}`);
+  for (let i = 0; i < indices.length; i += 3) {
+    obj.lines.push(`f ${vertexRef(indices[i])} ${vertexRef(indices[i + 1])} ${vertexRef(indices[i + 2])}`);
   }
 
   obj.vertexOffset += positions.length;
@@ -428,7 +879,7 @@ function convertPrimitive(
   obj.normalOffset += normals?.length ?? 0;
 }
 
-function convertGlbToObj(source: string): string {
+async function convertGlbToObj(source: string): Promise<ConvertedArtifacts> {
   const bytes = readFileSync(source);
   const { gltf, bin } = parseGlb(bytes);
   const sceneIndex = gltf.scene ?? 0;
@@ -441,17 +892,24 @@ function convertGlbToObj(source: string): string {
     throw new Error("GLB files with external buffer URIs are not supported by this simple converter.");
   }
 
+  const sourceBase = basename(source, extname(source));
+  const materialLibrary = buildMaterialLibrary(gltf, bin, sourceBase);
+  const headerLines = [
+    `# Converted from ${basename(source)} by glb-to-obj.ts`,
+    "# Materials are exported to MTL; skins, animations, and cameras are not exported.",
+  ];
+  if (materialLibrary.mtl) {
+    headerLines.push(`mtllib ${sourceBase}.mtl`);
+  }
+
   const obj: ObjParts = {
-    lines: [
-      `# Converted from ${basename(source)} by glb-to-obj.ts`,
-      "# Materials, skins, animations, cameras, and textures are not exported.",
-    ],
+    lines: headerLines,
     vertexOffset: 0,
     uvOffset: 0,
     normalOffset: 0,
   };
 
-  const visitNode = (nodeIndex: number, parentMatrix: Mat4, path: string): void => {
+  const visitNode = async (nodeIndex: number, parentMatrix: Mat4, path: string): Promise<void> => {
     const node = gltf.nodes?.[nodeIndex];
     if (!node) {
       throw new Error(`Missing node ${nodeIndex}.`);
@@ -467,26 +925,41 @@ function convertGlbToObj(source: string): string {
         throw new Error(`Missing mesh ${node.mesh}.`);
       }
 
-      mesh.primitives?.forEach((primitive, primitiveIndex) => {
+      for (const [primitiveIndex, primitive] of (mesh.primitives ?? []).entries()) {
         const meshName = mesh.name ?? `mesh_${node.mesh}`;
-        convertPrimitive(gltf, bin, primitive, worldMatrix, `${nodePath}_${meshName}_${primitiveIndex}`, obj);
-      });
+        const materialName = primitive.material === undefined
+          ? undefined
+          : materialLibrary.materialNames.get(primitive.material);
+        await convertPrimitive(
+          gltf,
+          bin,
+          primitive,
+          worldMatrix,
+          `${nodePath}_${meshName}_${primitiveIndex}`,
+          obj,
+          materialName,
+        );
+      }
     }
 
     for (const childIndex of node.children ?? []) {
-      visitNode(childIndex, worldMatrix, nodePath);
+      await visitNode(childIndex, worldMatrix, nodePath);
     }
   };
 
   for (const nodeIndex of scene.nodes ?? []) {
-    visitNode(nodeIndex, identity(), "");
+    await visitNode(nodeIndex, identity(), "");
   }
 
   if (obj.vertexOffset === 0) {
     throw new Error("No mesh geometry was found.");
   }
 
-  return `${obj.lines.join("\n")}\n`;
+  return {
+    obj: `${obj.lines.join("\n")}\n`,
+    mtl: materialLibrary.mtl,
+    textures: materialLibrary.textures,
+  };
 }
 
 function isGlbFile(path: string): boolean {
@@ -525,6 +998,10 @@ function outputPathFor(source: string): string {
   return join(dirname(source), `${basename(source, extname(source))}.obj`);
 }
 
+function materialPathFor(source: string): string {
+  return join(dirname(source), `${basename(source, extname(source))}.mtl`);
+}
+
 function printHelp(): void {
   console.log(`Usage:
   bun run glb-to-obj.ts [--force] [file-or-folder ...]
@@ -539,7 +1016,7 @@ Examples:
   bun build --compile ./glb-to-obj.ts --outfile glb-to-obj`);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const force = args.includes("--force");
   const help = args.includes("--help") || args.includes("-h");
@@ -569,8 +1046,16 @@ function main(): void {
     }
 
     try {
-      const obj = convertGlbToObj(source);
-      writeFileSync(target, obj);
+      const artifacts = await convertGlbToObj(source);
+      writeFileSync(target, artifacts.obj);
+      if (artifacts.mtl) {
+        writeFileSync(materialPathFor(source), artifacts.mtl);
+      }
+      for (const texture of artifacts.textures) {
+        const texturePath = join(dirname(source), texture.relativePath);
+        mkdirSync(dirname(texturePath), { recursive: true });
+        writeFileSync(texturePath, texture.bytes);
+      }
       console.log(`ok: ${source} -> ${target}`);
       converted++;
     } catch (error) {
@@ -586,4 +1071,8 @@ function main(): void {
   }
 }
 
-main();
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(`fatal: ${message}`);
+  process.exitCode = 1;
+});

@@ -1,0 +1,10 @@
+{
+  "name": "glb-converter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "convert": "bun run ./glb-to-obj.ts",
+    "build": "bun build --compile ./glb-to-obj.ts --outfile glb-to-obj"
+  }
+}

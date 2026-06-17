@@ -884,7 +884,7 @@ async function convertPrimitive(
 
   if (uvs) {
     for (const [u, v] of uvs) {
-      obj.lines.push(`vt ${formatNumber(u)} ${formatNumber(v)}`);
+      obj.lines.push(`vt ${formatNumber(u)} ${formatNumber(1 - v)}`);
     }
   }
 

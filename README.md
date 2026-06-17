@@ -28,7 +28,7 @@ To build a standalone executable:
 bun run build
 ```
 
-The converter exports mesh positions, triangle faces, normals, UVs, node transforms, materials, embedded textures, and Draco-compressed glTF meshes.
+The converter exports mesh positions, triangle faces, normals, OBJ-flipped UVs, node transforms, materials, embedded textures, and Draco-compressed glTF meshes.
 
 Embedded WebP textures are converted to PNG for better OBJ/MTL importer compatibility. This currently uses the macOS `sips` command-line tool.
 

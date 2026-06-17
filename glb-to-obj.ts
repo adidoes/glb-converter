@@ -1,6 +1,16 @@
 #!/usr/bin/env bun
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import draco3dImport from "draco3dgltf";
 
@@ -492,17 +502,45 @@ function formatNumber(value: number): string {
 }
 
 function imageExtension(mimeType?: string, uri?: string): string {
+  if (mimeType === "image/webp" || uri?.split("?")[0].toLowerCase().endsWith(".webp")) {
+    return ".png";
+  }
   if (mimeType === "image/jpeg") {
     return ".jpg";
   }
   if (mimeType === "image/png") {
     return ".png";
   }
-  if (mimeType === "image/webp") {
-    return ".webp";
-  }
   const uriExt = uri ? extname(uri.split("?")[0]) : "";
   return uriExt || ".bin";
+}
+
+function isWebpImage(image: GltfImage): boolean {
+  return image.mimeType === "image/webp" || Boolean(image.uri?.split("?")[0].toLowerCase().endsWith(".webp"));
+}
+
+function convertWebpToPng(bytes: Uint8Array): Uint8Array {
+  const workdir = mkdtempSync(join(tmpdir(), "glb-to-obj-webp-"));
+  const input = join(workdir, "input.webp");
+  const output = join(workdir, "output.png");
+
+  try {
+    writeFileSync(input, bytes);
+    const result = Bun.spawnSync({
+      cmd: ["sips", "-s", "format", "png", input, "--out", output],
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+
+    if (!result.success) {
+      const stderr = new TextDecoder().decode(result.stderr).trim();
+      throw new Error(`WebP to PNG conversion failed${stderr ? `: ${stderr}` : ""}`);
+    }
+
+    return readFileSync(output);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 }
 
 function decodeDataUri(uri: string): Uint8Array | undefined {
@@ -607,6 +645,10 @@ function extractTextureArtifacts(gltf: Gltf, bin: Uint8Array, textureDir: string
     }
 
     if (bytes) {
+      if (isWebpImage(image)) {
+        bytes = convertWebpToPng(bytes);
+      }
+
       artifacts.push({
         relativePath: textureRelativePath(gltf, textureDir, imageIndex),
         bytes,

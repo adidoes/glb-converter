@@ -30,4 +30,6 @@ bun run build
 
 The converter exports mesh positions, triangle faces, normals, UVs, node transforms, materials, embedded textures, and Draco-compressed glTF meshes.
 
+Embedded WebP textures are converted to PNG for better OBJ/MTL importer compatibility. This currently uses the macOS `sips` command-line tool.
+
 OBJ/MTL cannot represent every glTF feature, so skins, animations, cameras, sparse accessors, and non-triangle primitives are not exported. glTF PBR materials are mapped to a practical MTL subset with comments for metallic-roughness and occlusion textures.

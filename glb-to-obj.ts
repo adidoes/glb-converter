@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import draco3dImport from "draco3dgltf";
+import dracoDecoderWasmPath from "draco3dgltf/draco_decoder_gltf.wasm";
 
 type Gltf = {
   scene?: number;
@@ -220,7 +221,7 @@ type DracoFloat32Array = {
 };
 
 type DracoPackage = {
-  createDecoderModule(options: Record<string, never>): Promise<DracoModule>;
+  createDecoderModule(options: { locateFile?: (file: string) => string }): Promise<DracoModule>;
 };
 
 const draco3d = draco3dImport as DracoPackage;
@@ -296,7 +297,9 @@ function getBufferViewBytes(gltf: Gltf, bin: Uint8Array, bufferViewIndex: number
 }
 
 async function getDracoModule(): Promise<DracoModule> {
-  dracoModulePromise ??= draco3d.createDecoderModule({});
+  dracoModulePromise ??= draco3d.createDecoderModule({
+    locateFile: (file) => file === "draco_decoder_gltf.wasm" ? dracoDecoderWasmPath : file,
+  });
   return dracoModulePromise;
 }
 

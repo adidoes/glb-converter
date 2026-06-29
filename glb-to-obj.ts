@@ -699,8 +699,12 @@ function buildMaterialLibrary(gltf: Gltf, bin: Uint8Array, sourceBase: string): 
       `newmtl ${materialName}`,
       `Ka ${formatNumber(emissive[0] ?? 0)} ${formatNumber(emissive[1] ?? 0)} ${formatNumber(emissive[2] ?? 0)}`,
       `Kd ${formatNumber(baseColor[0] ?? 1)} ${formatNumber(baseColor[1] ?? 1)} ${formatNumber(baseColor[2] ?? 1)}`,
+      "Ks 0 0 0",
+      "Ns 1",
+      "Pr 1",
+      "Pm 0",
       `d ${formatNumber(baseColor[3] ?? 1)}`,
-      `illum ${baseColorTexture || normalTexture ? 2 : 1}`,
+      "illum 1",
     );
 
     if (baseColorTexture) {
@@ -708,7 +712,6 @@ function buildMaterialLibrary(gltf: Gltf, bin: Uint8Array, sourceBase: string): 
     }
     if (normalTexture) {
       lines.push(`norm ${normalTexture}`);
-      lines.push(`bump ${normalTexture}`);
     }
     if (emissiveTexture) {
       lines.push(`map_Ke ${emissiveTexture}`);

@@ -32,4 +32,4 @@ The converter exports mesh positions, triangle faces, normals, OBJ-flipped UVs, 
 
 Embedded WebP textures are converted to PNG for better OBJ/MTL importer compatibility. This currently uses the macOS `sips` command-line tool.
 
-OBJ/MTL cannot represent every glTF feature, so skins, animations, cameras, sparse accessors, and non-triangle primitives are not exported. glTF PBR materials are mapped to a practical MTL subset with comments for metallic-roughness and occlusion textures.
+OBJ/MTL cannot represent every glTF feature, so skins, animations, cameras, sparse accessors, and non-triangle primitives are not exported. glTF PBR materials are mapped to a matte MTL subset with comments for metallic-roughness and occlusion textures.
